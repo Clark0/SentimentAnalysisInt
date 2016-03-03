@@ -1,0 +1,125 @@
+import sys
+import os
+import numpy as np
+from sklearn.feature_extraction.text import CountVectorizer
+from sklearn.feature_extraction.text import TfidfTransformer
+from sklearn.preprocessing import Normalizer
+from sklearn import metrics
+from time import time
+from sklearn.svm import LinearSVC
+from scipy import *
+from sklearn.cross_validation import train_test_split
+import random
+import gc
+import cPickle
+from sklearn.linear_model import SGDClassifier, Perceptron, PassiveAggressiveClassifier, LogisticRegression
+
+
+
+
+def memory_dump(fname):
+    dump = open(fname, 'w')
+    for obj in gc.get_objects():
+        i = id(obj)
+        size = sys.getsizeof(obj, 0)
+        #    referrers = [id(o) for o in gc.get_referrers(obj) if hasattr(o, '__class__')]
+        referents = [id(o) for o in gc.get_referents(obj) if hasattr(o, '__class__')]
+        if hasattr(obj, '__class__'):
+            cls = str(obj.__class__)
+            cPickle.dump({'id': i, 'class': cls, 'size': size, 'referents': referents}, dump)
+
+
+def NewLineTokenizer (Str):
+    #you may use your own tokenizer
+    return Str.split('\n')
+
+
+###############################################################################
+# main
+###############################################################################
+@profile
+def main():
+    if sys.argv[2] == 'svm':
+        Clf = LinearSVC(C = 0.1, class_weight = 'balanced',max_iter=100)
+    elif sys.argv[2] == 'lr':
+        Clf = LogisticRegression (C=0.1,max_iter=100,n_jobs=8)
+    elif sys.argv[2] == 'pa':
+        Clf = PassiveAggressiveClassifier(C=0.1,n_iter=1,n_jobs=8,class_weight='balanced')
+    else:
+        Clf = SGDClassifier(n_iter=1,n_jobs=8,class_weight='balanced')
+
+    PosFolder = '/home/annamalai/Mahin/malware'
+    NegFolder = '/home/annamalai/Mahin/anubis-good'
+    print 'Clf: {}, Pos: {}, Neg: {}, ngram: {}'.format(Clf, PosFolder, NegFolder, sys.argv[1])
+
+
+    PosSamples = [os.path.join (PosFolder, f) for f in os.listdir(PosFolder)]#[:100]
+    NegSamples = [os.path.join (NegFolder, f) for f in os.listdir(NegFolder)]#[:100]
+    X = PosSamples + NegSamples
+    y = [1 for _ in xrange(len(PosSamples))] + [-1 for _ in xrange (len(NegSamples))]
+    X_train, X_test, y_train, y_test = train_test_split(X,
+                                                        y,
+                                                        test_size=0.33,
+                                                        random_state=random.randint(0,100))
+    print '# TrainLabels', len(y_train)
+    print '# TestLabels', len(y_test)
+
+    print 'performing CVectorizer'
+    CVectorizer = CountVectorizer(input = u'filename',
+                                  lowercase = False,
+                                  token_pattern = None,
+                                  tokenizer = NewLineTokenizer,
+                                  ngram_range=(1, int(sys.argv[1])),
+                                  dtype=np.float64,
+                                  decode_error = 'ignore')
+    print 'performing TfidfTransformer and Normalizer'
+    TFIDFTransformer = TfidfTransformer()
+    normalizer = Normalizer()
+    print 'creating Train and Test FVs'
+    T0 = time()
+    TrainFVs = CVectorizer.fit_transform(X_train)
+    TestFVs = CVectorizer.transform(X_test)
+    print 'feat ext time', time() - T0
+
+    TrainFVs = TFIDFTransformer.fit_transform(TrainFVs)
+    TestFVs = TFIDFTransformer.transform(TestFVs)
+
+    print 'Trai/test split'
+    print TrainFVs.shape
+    print TestFVs.shape
+    raw_input('hit any key...')
+
+    print 'training classifier with train samples shape:', TrainFVs.shape
+    T0 = time()
+    # memory_dump('before_train_mem.txt')
+    Model = Clf.fit (TrainFVs, y_train) # re-train on current training set (daily)
+    print 'batch fitted'
+    print 'training time', time() - T0
+    # memory_dump('after_train_mem.txt')
+
+    print 'testing classifier with test samples shape:', TestFVs.shape
+    T0 = time()
+    # memory_dump('before_test_mem.txt')
+    PredictedLabels = Clf.predict(TestFVs)
+    print 'testing time', time() - T0
+    # memory_dump('after_test_mem.txt')
+
+    print '*'*100
+    print 'classification report'
+    print '-'*20
+    Accuracy = np.mean(PredictedLabels == y_test)
+    print "Test Set Accuracy = ", Accuracy
+
+    print(metrics.classification_report(y_test,
+                PredictedLabels, target_names=['Goodware', 'Malware']))
+
+    print "Accuracy classification score:", metrics.accuracy_score(y_test, PredictedLabels)
+    print "Hamming loss:", metrics.hamming_loss(y_test, PredictedLabels)
+    print "Average hinge loss:", metrics.hinge_loss(y_test, PredictedLabels)
+    print "Log loss:", metrics.log_loss(y_test, PredictedLabels)
+    print "F1 Score:", metrics.f1_score(y_test, PredictedLabels)
+    print "Zero-one classification loss:", metrics.zero_one_loss(y_test, PredictedLabels)
+    print '*'*100
+
+if __name__ == '__main__':
+    main()
